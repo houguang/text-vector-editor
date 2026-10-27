@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GlyphCut · 文字转矢量线条编辑器</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="brand-icon">⌁</span><div><strong>GlyphCut</strong><small>文字转矢量线条编辑器</small></div></div>
+      <div class="top-actions">
+        <button id="btn-undo" title="撤销">↶</button><button id="btn-redo" title="重做">↷</button>
+        <span class="divider"></span><button id="btn-zoom-out">−</button><span id="zoom-label">100%</span><button id="btn-zoom-in">+</button><button id="btn-fit">适应</button>
+        <span class="divider"></span><button id="btn-export-sel">导出选中</button><button id="btn-export-all" class="primary">导出全部</button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="left-panel panel-scroll">
+        <section class="panel-section">
+          <h3><b>1</b>文字</h3>
+          <textarea id="text-input" rows="3" spellcheck="false">Hello 世界</textarea>
+        </section>
+        <section class="panel-section fonts-section">
+          <h3><b>2</b>字体</h3>
+          <input id="font-search" type="search" placeholder="搜索字体（中文 / English）" />
+          <div id="font-list" class="font-list" role="listbox"></div>
+          <label class="select-label">字重
+            <select id="face-select"></select>
+          </label>
+          <div id="font-meta" class="font-meta">—</div>
+          <button id="btn-convert" class="wide primary">转为曲线 <kbd>Ctrl↵</kbd></button>
+          <div id="convert-status" class="hint">等待输入文字</div>
+        </section>
+        <section class="panel-section tools-section">
+          <h3><b>3</b>曲线编辑</h3>
+          <div class="button-grid"><button id="btn-cut">点切断</button><button id="btn-join">连接端点</button><button id="btn-close-line">直线闭合</button><button id="btn-close-arc">圆弧闭合</button><button id="btn-insert">插入节点</button><button id="btn-delete">删除</button></div>
+          <div class="checks"><label><input id="chk-nodes" type="checkbox" checked />显示节点</label><label><input id="chk-grid" type="checkbox" checked />显示网格</label></div>
+          <div id="tool-hint" class="hint">尺寸请直接拖拽选框四角调整。</div>
+        </section>
+      </aside>
+
+      <main id="stage" class="stage"><canvas id="canvas" aria-label="矢量编辑画布"></canvas><div id="busy" class="busy" hidden><span class="spinner"></span><span id="busy-text">处理中…</span></div><div id="toast" class="toast" hidden></div></main>
+
+      <aside class="right-panel panel-scroll">
+        <section class="panel-section stroke-section"><h3>笔画列表 <span class="count" id="stroke-count">0</span></h3><button id="btn-add-stroke" class="wide primary">添加选中路径</button><div id="stroke-list" class="stroke-list"><div class="empty">选中闭合路径后点上方按钮<br />即可加入笔画列表</div></div></section>
+        <section class="export-panel"><div class="export-buttons"><button id="btn-export-strokes">批量导出笔画</button><button id="btn-export-dir">目录…</button></div><p id="stroke-hint">仅导出描边线条，文件名使用笔画名称。首次导出时选择目录。</p></section>
+      </aside>
+    </div>
+    <footer class="statusbar"><span id="sb-coord">x 0.0　y 0.0</span><span id="sb-sel">未选中</span><span id="sb-hint">就绪</span><span class="status-spacer"></span><span id="sb-font">—</span><span id="sb-zoom">100%</span></footer>
+  </div>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

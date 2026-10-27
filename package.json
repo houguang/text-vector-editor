@@ -1,0 +1,16 @@
+{
+  "name": "glyphcut",
+  "private": true,
+  "version": "0.1.0",
+  "description": "文字转矢量线条编辑器（Tauri 2 + Rust + 原生 Canvas）",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri",
+    "test": "node tests/algorithms.test.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4"
+  }
+}

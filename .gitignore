@@ -1,0 +1,18 @@
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+*.pdb
+
+# Node
+node_modules/
+npm-debug.log*
+
+# 构建产物
+dist/
+*.exe
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
