@@ -12,14 +12,16 @@ import { invoke, isTauri } from './api.js';
 
 const SIZE = 1000;
 const MARGIN = 50;
+/** 字身框导出时的安全余量（比例）：字体墨迹偶尔略微超出 em 框，留一点避免被裁 */
+const CELL_SAFE = 0.02;
 
 /** XML 文本转义：title 来自用户可编辑的笔画名，必须转义后再拼进 SVG */
 const xmlText = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
 
-/** 由参考框算出「缩放到 1000×1000 并居中」的变换 */
-function makeFrame(box) {
-  const avail = SIZE - MARGIN * 2;
+/** 由参考框算出「缩放到 1000×1000 并居中」的变换；margin=0 表示参考框正好铺满画布 */
+function makeFrame(box, margin = MARGIN) {
+  const avail = SIZE - margin * 2;
   // 退化包围盒（纯水平/垂直线）用 1 参与求缩放，但用真实宽高计算居中偏移
   const w = box.w > 1e-9 ? box.w : 1;
   const h = box.h > 1e-9 ? box.h : 1;
@@ -67,7 +69,11 @@ export function buildSVG(shapes, title = 'GlyphCut export') {
   return wrap(body, title);
 }
 
-/** 一个笔画（可含多条轮廓）：按整体包围盒居中并放大到 900×900 可用区域 */
+/**
+ * 一个笔画（可含多条轮廓）。
+ * - frame 为空：按自身包围盒居中放大到 900×900（基本笔画，每个都铺满便于做范本）
+ * - frame 有值（字身框）：把字身框铺满整个 1000×1000，笔画保留在字中的位置与相对大小（部首）
+ */
 export function buildStrokeSVG(contours, title = 'stroke', frame = null) {
   const list = (contours || []).filter(Boolean);
   if (!list.length) return null;
@@ -79,7 +85,8 @@ export function buildStrokeSVG(contours, title = 'stroke', frame = null) {
   }
   if (!box || (box.w <= 1e-9 && box.h <= 1e-9)) return null;
 
-  const fr = frame || makeFrame(box);
+  // 字身框若与墨迹错位（旧数据），取并集，避免导出后笔画落在画布外
+  const fr = frame ? makeFrame(G.unionBBox(frame, box), SIZE * CELL_SAFE) : makeFrame(box);
   const parts = list
     .map((c) => G.contourToPathData(G.transformContour(c, (p) => applyFrame(fr, p))))
     .filter(Boolean);
@@ -138,7 +145,7 @@ export async function exportStrokes() {
   const files = [];
   let skipped = 0;
   for (const s of state.strokes) {
-    const svg = buildStrokeSVG(s.contours || (s.contour ? [s.contour] : []), s.name || 'stroke');
+    const svg = buildStrokeSVG(s.contours || (s.contour ? [s.contour] : []), s.name || 'stroke', s.frame || null);
     if (!svg) {
       skipped += 1;
       continue;

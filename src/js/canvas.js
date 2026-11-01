@@ -608,8 +608,11 @@ function onPointerDown(e) {
     return;
   }
 
-  if (!e.shiftKey) E.selectShape(null, false);
-  drag = { type: 'rubber', start: wp, additive: e.shiftKey, base: [...state.selection.shapes] };
+  // 框选一律「替换」当前选择：不再用 Shift 追加。
+  // 中文输入法切换中英文时常常按着 Shift，若 Shift+框选=追加，用户会莫名把左侧的字一起选上。
+  // 需要加选请用 Shift 点选单个对象。
+  E.selectShape(null, false);
+  drag = { type: 'rubber', start: wp, additive: false, base: [] };
 }
 
 function captureSelectedNodes() {
@@ -767,6 +770,39 @@ function onDblClick(e) {
 }
 
 /** 双击空白画布时由 UI 层弹出文字输入框 */
+/**
+ * 把当前画布内容渲染成方形缩略图（PNG dataURL），用于作品库列表。
+ * 用独立的离屏 canvas，不依赖主画布的缩放与视口。
+ */
+export function renderThumbnail(size = 160) {
+  const cv = document.createElement('canvas');
+  cv.width = size;
+  cv.height = size;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#0a0c10';
+  ctx.fillRect(0, 0, size, size);
+
+  const box = G.shapesBBox(state.shapes);
+  if (!box || box.w <= 0 || box.h <= 0) return cv.toDataURL('image/png');
+
+  const pad = size * 0.07;
+  const s = Math.min((size - pad * 2) / box.w, (size - pad * 2) / box.h);
+  ctx.save();
+  ctx.translate(size / 2, size / 2);
+  ctx.scale(s, s);
+  ctx.translate(-(box.x + box.w / 2), -(box.y + box.h / 2));
+  ctx.strokeStyle = '#c8d2e4';
+  ctx.lineWidth = 1.3 / s;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  for (const shape of state.shapes) {
+    const d = G.shapeToPathData(shape);
+    if (d) ctx.stroke(new Path2D(d));
+  }
+  ctx.restore();
+  return cv.toDataURL('image/png');
+}
+
 export function setBlankDblClickHandler(fn) {
   blankDblClickHandler = fn;
 }

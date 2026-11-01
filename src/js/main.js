@@ -7,6 +7,7 @@ import * as E from './edits.js';
 import * as C from './canvas.js';
 import * as S from './state.js';
 import * as X from './export.js';
+import * as P from './projects.js';
 
 async function boot() {
   const canvas = document.getElementById('canvas');
@@ -22,4 +23,4 @@ if (document.readyState === 'loading') {
 }
 
 // 自动化测试 / 调试钩子：便于通过 CDP 驱动真实 UI 做端到端校验
-globalThis.__gc = { G, E, C, S, X };
+globalThis.__gc = { G, E, C, S, X, P };

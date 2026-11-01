@@ -1,5 +1,16 @@
 # 修复记录
 
+## 2026-11-01 部首定位 + 作品库
+
+- **按整字位置保存（部首）**：右栏新增「按整字位置保存」开关。关闭时按单笔自身包围盒居中放大（基本笔画）；打开时以字符**字身框（em box）**为参考框，框铺满 1000×1000，笔画保留在字中的位置与相对大小，导出后放进田字格即原位显示。字身框按 `cellKey` 存在 `state.charCells`，整字移动/缩放时同步变换，只动单笔时不动（`src/js/geometry.js`、`src/js/edits.js`、`src/js/export.js`）。
+- **字身框计算修正**：`ascent + descent` 是错的——字体 descender 为负值会把框压短，笔画溢出方格下沿；中文字体的 typo/hhea 降部常是**行距值**（实测 −0.253em，字面框实际约 0.12em），直接用会把字顶到上方。改为 `side = max(字号, advance)`、`asc = clamp(em 升部, 0.88em, 0.95em)`，后端 `MeasureResponse` 新增 `emAscent`/`emDescent`（`src-tauri/src/outline.rs`）。
+- **作品库**：工具栏新增「保存」（`Ctrl+S`）与「作品库」（`Ctrl+O`）。工程存到 `%APPDATA%\com.houguang.glyphcut\projects\`，正文与元信息分离，缩略图 160×160 PNG 存元信息里；弹层支持打开、改名另存、删除。打开时按 `family`/`subfamily` 还原字体（`src-tauri/src/store.rs`、`src/js/projects.js`）。
+- **修复：打开作品后右侧笔画列表不刷新**：`applyDoc` 只发 `edit`，而列表只在 `strokes`/`undo`/`redo` 时重建；补发 `strokes` 并让 `openProject` 调 `refreshPanels(true)`。
+- **修复：打开作品后 id 撞号**：`applyDoc` 未把 `nextId` 推到已有 id 之后，新建对象复用 `s1`，而选择集是 `Set<id>`——表现为「选一个却同时选中另一个」「加进去的不是选中的那个」「预览空白」。新增 `syncNextIds()` / `dedupeIds()`，并让 `nextShapeId()` 跳过已占用 id。
+- **修复：部首预览空白**：笔画存的是快照字身框，字被挪动后框与字形错位。转换时记录 `cell.ink`，添加时按「当前墨迹 − 记录墨迹」重新锚定，并在缩略图/导出处用「框 ∪ 墨迹」兜底。
+- **框选不再叠加 Shift**：中文输入法切换中英文常按 Shift，`Shift + 框选` 追加选择会让用户误以为选中逻辑出错；框选改为始终覆盖，加选改用 `Shift + 点选`。
+- 前端测试 **66**（新增字身框、作品库、id 唯一性、错位兜底等用例）；Rust 测试 **12**（新增 `pen_x` 递推、字身框覆盖墨迹、作品库 id 校验）。
+
 ## 2026-10-27 追加需求
 
 - **导出居中/放大**：`buildSVG` 与 `buildContourSVG` 改为以本次导出内容自身包围盒为参考框，等比放大到 900×900 并居中；批量导出每个笔画独立居中放大，不再共用一个包含整份文档的 frame（`src/js/export.js`）。

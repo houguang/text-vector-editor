@@ -282,15 +282,42 @@ export function cutAt(sid, at) {
 }
 
 // ---------------------------------------------------------------- 笔画库
+
+/**
+ * 取某个轮廓所属字符的字身框，并按「字符当前墨迹」重新锚定。
+ * 旧工程里的框是按转换时的位置算的，之后字被拖动、框不会自动跟随，
+ * 直接用会导致笔画落在框外（预览空白、导出位置错）。这里用记录墨迹与当前墨迹的
+ * 位移把框平移过去；没有墨迹记录时原样返回（上层还有并集兜底）。
+ */
+function cellForPart(part) {
+  const cell = part.cellKey ? state.charCells[part.cellKey] : null;
+  if (!cell) return null;
+  const out = { ...cell };
+  if (!cell.ink) return out;
+
+  let ink = null;
+  for (const s of state.shapes) {
+    if (s.cellKey !== part.cellKey) continue;
+    const b = G.shapeBBox(s);
+    if (b) ink = ink ? G.unionBBox(ink, b) : b;
+  }
+  if (!ink) return out;
+  out.x += ink.x + ink.w / 2 - (cell.ink.x + cell.ink.w / 2);
+  out.y += ink.y + ink.h / 2 - (cell.ink.y + cell.ink.h / 2);
+  return out;
+}
 export function nextStrokeId() {
-  return `k${state.nextStrokeId++}`;
+  const used = new Set(state.strokes.map((s) => s.id));
+  let id = `k${state.nextStrokeId++}`;
+  while (used.has(id)) id = `k${state.nextStrokeId++}`;
+  return id;
 }
 
 /**
  * 把选中的闭合路径加入笔画列表（快照复制，与画布解耦）。
  * 开放路径会被跳过，并给出提示。
  */
-export function addStrokesFromSelection() {
+export function addStrokesFromSelection(opts = {}) {
   const parts = selectedShapes();
   if (!parts.length) return { ok: false, msg: '请先选中路径' };
 
@@ -311,17 +338,32 @@ export function addStrokesFromSelection() {
   }
   if (!contours.length) return { ok: false, msg: '只能把闭合路径加入笔画列表' };
 
+  // 部首模式：记录字身框，导出时按整字位置映射；否则 frame = null（按单笔包围盒居中放大）
+  const useCell = opts.useCell !== undefined ? !!opts.useCell : !!state.ui.radicalMode;
+  let frame = null;
+  if (useCell) {
+    let box = null;
+    for (const p of parts) {
+      const cell = cellForPart(p);
+      if (!cell) continue;
+      box = box ? G.unionBBox(box, cell) : cell;
+    }
+    if (!box) return { ok: false, msg: '当前路径缺少字身框信息，请重新转换文字后再试' };
+    frame = box;
+  }
+
   pushHistory();
   state.strokes.push({
     id: nextStrokeId(),
-    name: `笔画 ${state.strokes.length + 1}`,
+    name: `${useCell ? '部首' : '笔画'} ${state.strokes.length + 1}`,
     example: [...examples].join(''),
     contours,
+    frame,
   });
   emit('strokes');
   return {
     ok: true,
-    msg: `已添加 1 个笔画（${contours.length} 条轮廓）${skipped ? `，跳过 ${skipped} 条开放路径` : ''}`,
+    msg: `已添加 1 个${useCell ? '部首（按整字位置）' : '笔画'}（${contours.length} 条轮廓）${skipped ? `，跳过 ${skipped} 条开放路径` : ''}`,
   };
 }
 
@@ -354,6 +396,31 @@ export function updateStrokeGeometry(id) {
 
 // ---------------------------------------------------------------- 变换（拖拽缩放用）
 
+/**
+ * 字身框跟随：只有当一个字符的**全部**轮廓都在本次变换里时，才同步它的字身框。
+ * 只动其中一部分时字身框保持不动——这正是「笔画在字中的位置发生改变」的语义。
+ */
+function syncCharCells(movedIds, transformPoint) {
+  const cells = state.charCells;
+  if (!cells) return;
+  const groups = new Map();
+  for (const s of state.shapes) {
+    if (!s.cellKey || !cells[s.cellKey]) continue;
+    const rec = groups.get(s.cellKey) || { total: 0, moved: 0 };
+    rec.total += 1;
+    if (movedIds.has(s.id)) rec.moved += 1;
+    groups.set(s.cellKey, rec);
+  }
+  for (const [key, rec] of groups) {
+    if (rec.moved > 0 && rec.moved === rec.total) {
+      const next = G.transformBox(cells[key], transformPoint);
+      // 记录墨迹也要跟着变换，否则「重新锚定」会用到过期的墨迹
+      if (cells[key].ink) next.ink = G.transformBox(cells[key].ink, transformPoint);
+      cells[key] = next;
+    }
+  }
+}
+
 export function applyScaleToShapes(snapshot, ox, oy, sx, sy) {
   for (const item of snapshot) {
     const shape = findShape(item.id);
@@ -373,6 +440,10 @@ export function applyScaleToShapes(snapshot, ox, oy, sx, sy) {
       });
     });
   }
+  syncCharCells(new Set(snapshot.map((i) => i.id)), (p) => ({
+    x: ox + (p.x - ox) * sx,
+    y: oy + (p.y - oy) * sy,
+  }));
 }
 
 export function applyTranslateToShapes(snapshot, dx, dy) {
@@ -392,6 +463,7 @@ export function applyTranslateToShapes(snapshot, dx, dy) {
       });
     });
   }
+  syncCharCells(new Set(snapshot.map((i) => i.id)), (p) => ({ x: p.x + dx, y: p.y + dy }));
 }
 
 export function snapshotShapes(shapes) {

@@ -162,6 +162,40 @@ export function unionBBox(a, b) {
   return { x, y, w: x2 - x, h: y2 - y };
 }
 
+/** 用点变换函数变换一个矩形框 */
+export function transformBox(box, fn) {
+  const a = fn({ x: box.x, y: box.y });
+  const b = fn({ x: box.x + box.w, y: box.y + box.h });
+  return {
+    x: Math.min(a.x, b.x),
+    y: Math.min(a.y, b.y),
+    w: Math.abs(b.x - a.x),
+    h: Math.abs(b.y - a.y),
+  };
+}
+
+/**
+ * 字身框（em box）：中文排版里的「字面框」，边长 = 字号，基线在顶边下方 0.88em。
+ *
+ * 为什么不用字体自报的 typo/hhea 降部：很多中文字体的 descender 是**行距**值
+ * （实测某字体 −0.253em），比字面框真实的 0.12em 大得多，直接拿来当框底会把
+ * 整个字顶到方格上方。所以降部固定按 0.12em 处理，升部在 0.88~0.95em 之间取字体值。
+ *
+ * 另一个坑：descender 是负值（y 轴向上），任何 `ascent + descent` 的写法都会把框压短。
+ */
+export function charCell(penX, advance, size, emAscent, baselineY) {
+  const adv = Number.isFinite(advance) && advance > 0 ? advance : size;
+  const side = Math.max(size, adv);
+  const rawAsc = Number.isFinite(emAscent) && emAscent > 0 ? emAscent : size * 0.88;
+  const asc = Math.min(Math.max(rawAsc, size * 0.88), size * 0.95);
+  return {
+    x: penX + (adv - side) / 2,
+    y: baselineY - asc,
+    w: side,
+    h: side,
+  };
+}
+
 export function shapesBBox(shapes) {
   let box = null;
   for (const s of shapes) {

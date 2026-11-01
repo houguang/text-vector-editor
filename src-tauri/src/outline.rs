@@ -29,6 +29,8 @@ pub struct Shape {
     pub contours: Vec<Contour>,
     pub bbox: BBox,
     pub advance: f64,
+    /// 该字符的排版起点（pen 位置），用于推算字身框
+    pub pen_x: f64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -98,6 +100,10 @@ pub struct MeasureResponse {
     pub max_width: f64,
     pub ascent: f64,
     pub descent: f64,
+    /// 字身框（em box）用的升部/降部：优先 OS/2 typo 度量（CJK 字体通常 0.88/0.12em），
+    /// 没有则退回 hhea。行距排版仍用 ascent/descent，两者不要混用。
+    pub em_ascent: f64,
+    pub em_descent: f64,
     pub units_per_em: f64,
     pub missing: Vec<String>,
 }
@@ -338,11 +344,22 @@ fn measure_impl(req: MeasureRequest) -> Result<MeasureResponse, String> {
         max_width = max_width.max(m.width);
         widths.push(m.width);
     }
+    let em_ascent = face
+        .typographic_ascender()
+        .map(|v| v as f64 * sy)
+        .unwrap_or_else(|| face.ascender() as f64 * sy);
+    let em_descent = face
+        .typographic_descender()
+        .map(|v| v as f64 * sy)
+        .unwrap_or_else(|| face.descender() as f64 * sy);
+
     Ok(MeasureResponse {
         line_widths: widths,
         max_width,
         ascent: face.ascender() as f64 * sy,
         descent: face.descender() as f64 * sy,
+        em_ascent,
+        em_descent,
         units_per_em: upem,
         missing,
     })
@@ -407,6 +424,7 @@ fn outline_impl(req: OutlineRequest) -> Result<OutlineResponse, String> {
                         contours,
                         bbox: bb,
                         advance,
+                        pen_x: pen,
                     });
                 }
             }
@@ -450,7 +468,7 @@ mod tests {
             return;
         };
         let resp = outline_impl(OutlineRequest {
-            text: "Hello 世界".into(),
+            text: "Hello世界".into(),
             font_path: path,
             face_index: 0,
             size: 120.0,
@@ -471,6 +489,18 @@ mod tests {
         assert!(resp.stats.shapes >= 6, "应至少生成 6 个字形，实际 {}", resp.stats.shapes);
         assert!(resp.stats.nodes > 50, "节点数过少：{}", resp.stats.nodes);
         assert!(resp.bbox.w > 100.0 && resp.bbox.h > 50.0, "包围盒异常：{:?}", resp.bbox);
+
+        // 字身框定位：pen_x 单调递增，且相邻差值等于前一个字的 advance
+        assert_eq!(resp.shapes[0].pen_x, 0.0, "首个字形 pen_x 应为 0");
+        for w in resp.shapes.windows(2) {
+            let gap = w[1].pen_x - w[0].pen_x;
+            assert!(
+                (gap - w[0].advance).abs() < 0.01,
+                "pen_x 递推不一致：gap={} advance={}",
+                gap,
+                w[0].advance
+            );
+        }
 
         // 每个闭合轮廓至少 3 个节点，且首尾不重复
         for s in &resp.shapes {
@@ -499,6 +529,67 @@ mod tests {
         })
         .expect("empty outline failed");
         assert_eq!(empty.stats.shapes, 0);
+    }
+
+    #[test]
+    fn char_cell_covers_glyph_ink() {
+        let Some(path) = find_font() else {
+            eprintln!("skip: no system font found");
+            return;
+        };
+        let size = 120.0f64;
+        let m = measure_impl(MeasureRequest {
+            text: "他".into(),
+            font_path: path.clone(),
+            face_index: 0,
+            size,
+            width_scale: 1.0,
+            letter_spacing: 0.0,
+        })
+        .expect("measure failed");
+
+        // em 度量必须来自 OS/2 typo（或 hhea 兜底），且降部为负值（y 轴向上）
+        assert!(m.em_ascent > 0.0, "em 升部异常：{}", m.em_ascent);
+        assert!(m.em_descent < 0.0, "em 降部应为负值：{}", m.em_descent);
+
+        let baseline = m.ascent;
+        // 与前端 geometry.charCell 保持一致：边长 = 字号，升部夹在 0.88~0.95em
+        let side = size;
+        let asc = m.em_ascent.max(size * 0.88).min(size * 0.95);
+        let cell_top = baseline - asc;
+        let cell_bottom = cell_top + side;
+        // 导出时留 2% 安全余量（export.js 的 CELL_SAFE）
+        let tol = side * 0.02;
+        println!(
+            "em={}/{} asc={} side={} cell={}..{} tol={}",
+            m.em_ascent, m.em_descent, asc, side, cell_top, cell_bottom, tol
+        );
+
+        let resp = outline_impl(OutlineRequest {
+            text: "他".into(),
+            font_path: path,
+            face_index: 0,
+            size,
+            width_scale: 1.0,
+            slant_deg: 0.0,
+            letter_spacing: 0.0,
+            baseline_y: baseline,
+            offset_x: 0.0,
+            line_index: 0,
+            start_index: 0,
+        })
+        .expect("outline failed");
+
+        for s in &resp.shapes {
+            let top = s.bbox.y;
+            let bottom = s.bbox.y + s.bbox.h;
+            println!("{} bbox y {}..{}", s.ch, top, bottom);
+            assert!(
+                top >= cell_top - tol && bottom <= cell_bottom + tol,
+                "字形 {} 的墨迹超出字身框（含 2% 余量）：{top}..{bottom} vs {cell_top}..{cell_bottom}",
+                s.ch
+            );
+        }
     }
 
     #[test]

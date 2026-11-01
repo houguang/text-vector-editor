@@ -67,6 +67,7 @@ function mockOutline(req) {
         contours,
         bbox: { x: pen, y: req.baselineY - size * 0.72, w: adv - spacing, h: size * 0.72 },
         advance: adv,
+        penX: pen,
       });
     }
     pen += adv;
@@ -91,6 +92,8 @@ function mockOutline(req) {
   };
 }
 
+const PROJ_PREFIX = 'glyphcut.project.';
+
 async function mockInvoke(cmd, args = {}) {
   await new Promise((r) => setTimeout(r, 30));
   switch (cmd) {
@@ -105,6 +108,8 @@ async function mockInvoke(cmd, args = {}) {
         maxWidth: Math.max(0, ...widths),
         ascent: req.size * 0.88,
         descent: req.size * 0.22,
+        emAscent: req.size * 0.88,
+        emDescent: -req.size * 0.12,
         unitsPerEm: 1000,
         missing: [],
       };
@@ -123,6 +128,44 @@ async function mockInvoke(cmd, args = {}) {
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
       return `（浏览器预览模式）已下载 ${a.download}`;
+    }
+    // ---- 作品库（浏览器预览用 localStorage 模拟）----
+    case 'list_projects': {
+      const out = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(PROJ_PREFIX) && k.endsWith('.meta')) {
+          try {
+            out.push(JSON.parse(localStorage.getItem(k)));
+          } catch {
+            /* 忽略损坏项 */
+          }
+        }
+      }
+      return out.sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+    case 'save_project': {
+      const meta = {
+        id: args.id,
+        name: args.name,
+        updatedAt: Date.now(),
+        shapes: args.shapes,
+        strokes: args.strokes,
+        thumb: args.thumb,
+      };
+      localStorage.setItem(`${PROJ_PREFIX}${args.id}`, args.data);
+      localStorage.setItem(`${PROJ_PREFIX}${args.id}.meta`, JSON.stringify(meta));
+      return meta;
+    }
+    case 'load_project': {
+      const v = localStorage.getItem(`${PROJ_PREFIX}${args.id}`);
+      if (!v) throw new Error('工程不存在');
+      return v;
+    }
+    case 'delete_project': {
+      localStorage.removeItem(`${PROJ_PREFIX}${args.id}`);
+      localStorage.removeItem(`${PROJ_PREFIX}${args.id}.meta`);
+      return null;
     }
     case 'save_svgs_dialog': {
       for (const f of args.files || []) {

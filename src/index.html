@@ -8,49 +8,137 @@
 </head>
 <body>
   <div class="app">
-    <header class="topbar">
-      <div class="brand"><span class="brand-icon">⌁</span><div><strong>GlyphCut</strong><small>文字转矢量线条编辑器</small></div></div>
-      <div class="top-actions">
-        <button id="btn-undo" title="撤销">↶</button><button id="btn-redo" title="重做">↷</button>
-        <span class="divider"></span><button id="btn-zoom-out">−</button><span id="zoom-label">100%</span><button id="btn-zoom-in">+</button><button id="btn-fit">适应</button>
-        <span class="divider"></span><button id="btn-export-sel">导出选中</button><button id="btn-export-all" class="primary">导出全部</button>
+    <header class="titlebar" data-tauri-drag-region>
+      <div class="brand" data-tauri-drag-region>
+        <svg class="logo" viewBox="0 0 40 40" aria-hidden="true">
+          <rect x="1.5" y="1.5" width="37" height="37" rx="10" fill="#12151d" stroke="#2a3140" />
+          <path d="M9 28.5 C13 8, 25 33, 31 12" fill="none" stroke="#ff9d2e" stroke-width="2.6" stroke-linecap="round" />
+          <rect x="7.4" y="26.9" width="3.2" height="3.2" fill="#e6ebf5" />
+          <rect x="29.4" y="10.4" width="3.2" height="3.2" fill="#e6ebf5" />
+        </svg>
+        <div class="brand-text">
+          <strong>GlyphCut</strong>
+          <span>文字转矢量线条编辑器</span>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <button id="btn-undo" class="icon-btn" title="撤销 (Ctrl+Z)" disabled>↶</button>
+        <button id="btn-redo" class="icon-btn" title="重做 (Ctrl+Y)" disabled>↷</button>
+        <span class="divider"></span>
+        <button id="btn-zoom-out" class="icon-btn" title="缩小">−</button>
+        <span id="zoom-label" class="zoom-label">100%</span>
+        <button id="btn-zoom-in" class="icon-btn" title="放大">+</button>
+        <button id="btn-fit" class="icon-btn wide" title="适应窗口 (F)">适应</button>
+        <span class="divider"></span>
+        <button id="btn-save" class="btn" title="保存作品 (Ctrl+S)">保存</button>
+        <button id="btn-library" class="btn" title="作品库 (Ctrl+O)">作品库</button>
+        <span class="divider"></span>
+        <button id="btn-export-sel" class="btn">导出选中</button>
+        <button id="btn-export-all" class="btn primary">导出全部</button>
       </div>
     </header>
 
-    <div class="workspace">
-      <aside class="left-panel panel-scroll">
-        <section class="panel-section">
-          <h3><b>1</b>文字</h3>
-          <textarea id="text-input" rows="3" spellcheck="false">Hello 世界</textarea>
+    <div class="body">
+      <aside class="panel left">
+        <section class="group">
+          <h3><i>1</i>文字</h3>
+          <textarea id="text-input" spellcheck="false" rows="3" placeholder="输入文字，支持多行…">Hello 世界</textarea>
         </section>
-        <section class="panel-section fonts-section">
-          <h3><b>2</b>字体</h3>
-          <input id="font-search" type="search" placeholder="搜索字体（中文 / English）" />
-          <div id="font-list" class="font-list" role="listbox"></div>
-          <label class="select-label">字重
-            <select id="face-select"></select>
-          </label>
-          <div id="font-meta" class="font-meta">—</div>
-          <button id="btn-convert" class="wide primary">转为曲线 <kbd>Ctrl↵</kbd></button>
-          <div id="convert-status" class="hint">等待输入文字</div>
+
+        <section class="group">
+          <h3><i>2</i>字体</h3>
+          <input id="font-search" class="input" type="search" placeholder="搜索字体（中文 / English）" autocomplete="off" />
+          <div class="font-list" id="font-list" role="listbox" aria-label="系统字体列表">
+            <div class="empty">正在读取系统字体…</div>
+          </div>
+          <div class="row">
+            <label class="row-label">字重</label>
+            <select id="face-select" class="select"></select>
+          </div>
+          <div class="font-meta" id="font-meta">—</div>
+
+          <button id="btn-convert" class="btn primary block">转为曲线 <kbd>Ctrl+↵</kbd></button>
+          <div class="hint" id="convert-status">—</div>
         </section>
-        <section class="panel-section tools-section">
-          <h3><b>3</b>曲线编辑</h3>
-          <div class="button-grid"><button id="btn-cut">点切断</button><button id="btn-join">连接端点</button><button id="btn-close-line">直线闭合</button><button id="btn-close-arc">圆弧闭合</button><button id="btn-insert">插入节点</button><button id="btn-delete">删除</button></div>
-          <div class="checks"><label><input id="chk-nodes" type="checkbox" checked />显示节点</label><label><input id="chk-grid" type="checkbox" checked />显示网格</label></div>
-          <div id="tool-hint" class="hint">尺寸请直接拖拽选框四角调整。</div>
+
+        <section class="group">
+          <h3><i>3</i>曲线编辑</h3>
+          <div class="btn-grid">
+            <button id="btn-cut" class="tool" title="点击后在路径上单击即可切断 (Ctrl+K)">点切断</button>
+            <button id="btn-join" title="连接两个端点 (Ctrl+J)">连接端点</button>
+            <button id="btn-close-line" title="用直线连接首尾并闭合">直线闭合</button>
+            <button id="btn-close-arc" title="用顺滑圆弧连接首尾并闭合">圆弧闭合</button>
+            <button id="btn-insert" title="在相邻节点中点插入">插入节点</button>
+            <button id="btn-delete" title="删除选中路径 (Del)">删除</button>
+          </div>
+          <div class="checks">
+            <label class="check"><input type="checkbox" id="chk-nodes" checked /> 显示节点</label>
+            <label class="check"><input type="checkbox" id="chk-grid" checked /> 显示网格</label>
+          </div>
+          <div class="hint" id="tool-hint">尺寸请直接拖拽选框四角调整。</div>
         </section>
       </aside>
 
-      <main id="stage" class="stage"><canvas id="canvas" aria-label="矢量编辑画布"></canvas><div id="busy" class="busy" hidden><span class="spinner"></span><span id="busy-text">处理中…</span></div><div id="toast" class="toast" hidden></div></main>
+      <main class="stage" id="stage">
+        <canvas id="canvas"></canvas>
+        <div class="stage-tip" id="stage-tip">
+          滚轮缩放 · 空格/中键拖拽平移 · 拖拽框选（覆盖当前选择） · Shift 点选加选 · 双击空白追加文字 · 双击线段插入节点
+        </div>
+        <div class="busy" id="busy" hidden><div class="spinner"></div><span id="busy-text">处理中…</span></div>
+        <div class="toast" id="toast" hidden></div>
+      </main>
 
-      <aside class="right-panel panel-scroll">
-        <section class="panel-section stroke-section"><h3>笔画列表 <span class="count" id="stroke-count">0</span></h3><button id="btn-add-stroke" class="wide primary">添加选中路径</button><div id="stroke-list" class="stroke-list"><div class="empty">选中闭合路径后点上方按钮<br />即可加入笔画列表</div></div></section>
-        <section class="export-panel"><div class="export-buttons"><button id="btn-export-strokes">批量导出笔画</button><button id="btn-export-dir">目录…</button></div><p id="stroke-hint">仅导出描边线条，文件名使用笔画名称。首次导出时选择目录。</p></section>
+      <aside class="panel right">
+        <section class="group grow">
+          <h3>笔画列表 <span class="badge" id="stroke-count">0</span></h3>
+          <label class="switch-row" title="打开：按整字位置保存（部首）；关闭：按单笔自身包围盒保存（基本笔画）">
+            <span class="switch-text">按整字位置保存</span>
+            <input type="checkbox" id="chk-radical" class="switch" />
+          </label>
+          <button id="btn-add-stroke" class="btn primary block">添加选中路径</button>
+          <div class="hint tight" id="save-mode-hint">关闭：单笔居中放大（基本笔画）</div>
+          <div class="stroke-list" id="stroke-list">
+            <div class="empty">选中闭合路径后点上方按钮<br />即可加入笔画列表</div>
+          </div>
+          <div class="export-row">
+            <button id="btn-export-strokes" class="btn">批量导出笔画</button>
+            <button id="btn-export-dir" class="btn" title="更改批量导出目录">目录…</button>
+          </div>
+          <div class="hint" id="stroke-hint">仅导出描边线条，文件名使用笔画名称。首次导出时选择目录。</div>
+        </section>
       </aside>
     </div>
-    <footer class="statusbar"><span id="sb-coord">x 0.0　y 0.0</span><span id="sb-sel">未选中</span><span id="sb-hint">就绪</span><span class="status-spacer"></span><span id="sb-font">—</span><span id="sb-zoom">100%</span></footer>
+
+    <footer class="statusbar">
+      <span class="sb-item" id="sb-coord">x 0.0　y 0.0</span>
+      <span class="sb-sep"></span>
+      <span class="sb-item" id="sb-sel">未选中</span>
+      <span class="sb-sep"></span>
+      <span class="sb-item" id="sb-hint">就绪</span>
+      <span class="sb-spacer"></span>
+      <span class="sb-item" id="sb-font">—</span>
+      <span class="sb-sep"></span>
+      <span class="sb-item" id="sb-zoom">100%</span>
+    </footer>
   </div>
+
+  <div class="modal" id="library" hidden>
+    <div class="modal-box">
+      <header class="modal-head">
+        <h2>作品库 <span class="badge" id="lib-count">0</span></h2>
+        <button class="icon-btn" id="lib-close" title="关闭 (Esc)">×</button>
+      </header>
+      <div class="lib-grid" id="lib-grid">
+        <div class="empty">还没有保存过作品</div>
+      </div>
+      <footer class="modal-foot">
+        <input id="lib-name" class="input" placeholder="作品名称（默认取输入的文字）" maxlength="40" />
+        <button id="lib-save" class="btn primary">保存当前作品</button>
+      </footer>
+    </div>
+  </div>
+
   <script type="module" src="./js/main.js"></script>
 </body>
 </html>

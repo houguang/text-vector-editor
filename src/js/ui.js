@@ -20,6 +20,7 @@ import {
 } from './state.js';
 import { invoke, isTauri } from './api.js';
 import { exportShapes, exportStrokes } from './export.js';
+import * as P from './projects.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) =>
@@ -186,7 +187,7 @@ function updateFontMeta() {
 
 // ---------------------------------------------------------------- 转换
 
-async function emitLine(line, base, { baselineY, lineIndex, startIndex, out, startX = 0 }) {
+async function emitLine(line, base, { baselineY, lineIndex, startIndex, out, startX = 0, emAscent = 0, emDescent = 0, size = 0 }) {
   const chars = Array.from(line);
   const CHUNK = 200;
   let x = startX;
@@ -197,12 +198,29 @@ async function emitLine(line, base, { baselineY, lineIndex, startIndex, out, sta
       req: { ...base, text: part, baselineY, offsetX: x, lineIndex, startIndex: idx },
     });
     for (const raw of res.shapes) {
+      // 字身框（em box）：pen 起点 + 字宽 + 升部/降部，供「按整字位置保存」使用
+      let cellKey = null;
+      if (Number.isFinite(raw.penX) && raw.advance > 0) {
+        cellKey = `c${state.charSeq}_${raw.charIndex}`;
+        state.charCells[cellKey] = G.charCell(raw.penX, raw.advance, size, emAscent, baselineY);
+      }
       // 关键：每个轮廓拆成独立路径，保证「每个独立部分可单独选中」
+      const parts = [];
       for (const c of raw.contours) {
         const shape = G.shapeFromOutline({ ...raw, contours: [c] }, nextShapeId());
         shape.bbox = G.shapeBBox(shape);
-        out.push(shape);
+        shape.cellKey = cellKey;
+        parts.push(shape);
       }
+      // 记下该字符当时的墨迹范围：字身框被移动后可以用它重新锚定
+      if (cellKey && state.charCells[cellKey]) {
+        let ink = null;
+        for (const sp of parts) {
+          if (sp.bbox) ink = ink ? G.unionBBox(ink, sp.bbox) : sp.bbox;
+        }
+        if (ink) state.charCells[cellKey].ink = ink;
+      }
+      out.push(...parts);
     }
     x += res.advance || 0;
     idx += Array.from(part).length;
@@ -240,6 +258,8 @@ async function convertText() {
   try {
     const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const measure = await invoke('measure_text', { req: { ...base, text: normalized } });
+    state.charCells = {};
+    state.charSeq += 1;
     const lines = normalized.split('\n');
     const lineH = LAYOUT.leading;
     const parts = [];
@@ -250,7 +270,15 @@ async function convertText() {
       const baselineY = measure.ascent + i * lineH;
       setBusy(true, `正在轮廓化… 第 ${i + 1}/${lines.length} 行`);
       if (line.trim()) {
-        await emitLine(line, base, { baselineY, lineIndex: i, startIndex, out: parts });
+        await emitLine(line, base, {
+          baselineY,
+          lineIndex: i,
+          startIndex,
+          out: parts,
+          emAscent: measure.emAscent,
+          emDescent: measure.emDescent,
+          size: LAYOUT.size,
+        });
       }
       startIndex += Array.from(line).length;
       await nextFrame();
@@ -321,12 +349,16 @@ async function addTextAt(text, anchor) {
     const frame = textAnchorFrame(measure, { x: ax, y: ay });
 
     const parts = [];
+    state.charSeq += 1;
     await emitLine(value, base, {
       baselineY: frame.baselineY,
       lineIndex: 0,
       startIndex: 0,
       out: parts,
       startX: frame.startX,
+      emAscent: measure.emAscent,
+      emDescent: measure.emDescent,
+      size: LAYOUT.size,
     });
 
     if (!parts.length) {
@@ -413,8 +445,12 @@ function openCanvasTextInput({ px, py, x, y }) {
 
 // ---------------------------------------------------------------- 笔画列表
 
-/** 把笔画几何画到列表里的小预览画布上 */
-function drawStrokeThumb(cv, contours) {
+/**
+ * 把笔画几何画到列表里的小预览画布上。
+ * 有字身框（部首）时按框铺满并画出田字格，直观显示它在字中的位置；
+ * 没有框（基本笔画）时按自身包围盒居中放大。
+ */
+function drawStrokeThumb(cv, contours, frame) {
   const size = 46;
   const dpr = window.devicePixelRatio || 1;
   cv.width = Math.round(size * dpr);
@@ -426,22 +462,40 @@ function drawStrokeThumb(cv, contours) {
   ctx.clearRect(0, 0, size, size);
 
   const list = (contours || []).filter(Boolean);
-  let box = null;
+  let ink = null;
   for (const c of list) {
     const b = G.contourBBox(c);
-    if (b) box = box ? G.unionBBox(box, b) : b;
+    if (b) ink = ink ? G.unionBBox(ink, b) : b;
   }
+  // 字身框若与墨迹错位（旧数据 / 字被挪过），取并集，宁可多留白也不能什么都看不见
+  let box = frame ? (ink ? G.unionBBox(frame, ink) : { ...frame }) : ink;
   if (!box) return;
-  const pad = 5;
+
+  const pad = frame ? 0 : 5;
   const w = Math.max(box.w, 1e-6);
   const h = Math.max(box.h, 1e-6);
   const s = Math.min((size - pad * 2) / w, (size - pad * 2) / h);
+
+  if (frame) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath();
+    ctx.moveTo(size / 2, 0);
+    ctx.lineTo(size / 2, size);
+    ctx.moveTo(0, size / 2);
+    ctx.lineTo(size, size / 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   ctx.save();
   ctx.translate(size / 2, size / 2);
   ctx.scale(s, s);
   ctx.translate(-(box.x + box.w / 2), -(box.y + box.h / 2));
   ctx.strokeStyle = '#b9c3d6';
-  ctx.lineWidth = 1.2 / s;
+  ctx.lineWidth = (frame ? 1 : 1.2) / s;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   for (const c of list) {
@@ -486,7 +540,7 @@ function renderStrokeList() {
 
   list.querySelectorAll('.stroke-thumb').forEach((cv) => {
     const s = state.strokes.find((x) => x.id === cv.dataset.id);
-    if (s) drawStrokeThumb(cv, s.contours || (s.contour ? [s.contour] : []));
+    if (s) drawStrokeThumb(cv, s.contours || (s.contour ? [s.contour] : []), s.frame || null);
   });
 }
 
@@ -579,6 +633,7 @@ function setTool(tool) {
 // ---------------------------------------------------------------- 绑定
 
 function bindFonts() {
+  $('text-input').addEventListener('input', markDirty);
   $('font-search').addEventListener('input', renderFontList);
   $('font-list').addEventListener('click', (e) => {
     const item = e.target.closest('.font-item');
@@ -604,6 +659,18 @@ function bindOptions() {
   });
 }
 
+/** 同步「按整字位置保存」开关带来的按钮文案与提示 */
+function updateSaveMode() {
+  const on = !!state.ui.radicalMode;
+  const btn = $('btn-add-stroke');
+  const hint = $('save-mode-hint');
+  if (btn) btn.textContent = on ? '添加选中部首' : '添加选中笔画';
+  if (hint) {
+    hint.textContent = on ? '打开：按整字位置保存，导出后可在田字格原位显示' : '关闭：单笔居中放大（基本笔画）';
+    hint.className = `hint tight ${on ? 'ok' : ''}`;
+  }
+}
+
 function bindButtons() {
   $('btn-convert').addEventListener('click', convertText);
   $('btn-undo').addEventListener('click', () => undo());
@@ -624,6 +691,16 @@ function bindButtons() {
   $('btn-add-stroke').addEventListener('click', () => {
     report(E.addStrokesFromSelection());
   });
+
+  const radicalChk = $('chk-radical');
+  if (radicalChk) {
+    radicalChk.checked = !!state.ui.radicalMode;
+    radicalChk.addEventListener('change', (e) => {
+      state.ui.radicalMode = e.target.checked;
+      updateSaveMode();
+    });
+  }
+  updateSaveMode();
   $('btn-export-strokes').addEventListener('click', async () => {
     await exportStrokes();
     updateExportHint();
@@ -719,6 +796,16 @@ function bindKeyboard() {
       E.selectAll();
       return;
     }
+    if (ctrl && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      saveCurrent();
+      return;
+    }
+    if (ctrl && e.key.toLowerCase() === 'o') {
+      e.preventDefault();
+      openLibrary();
+      return;
+    }
     if (ctrl && e.key.toLowerCase() === 'e') {
       e.preventDefault();
       exportShapes(e.shiftKey ? 'all' : 'selected');
@@ -726,6 +813,10 @@ function bindKeyboard() {
     }
 
     if (e.key === 'Escape') {
+      if (!$('library').hidden) {
+        closeLibrary();
+        return;
+      }
       if (state.ui.tool !== 'select') setTool('cut');
       else {
         clearSelection();
@@ -742,6 +833,187 @@ function bindKeyboard() {
   });
 }
 
+// ---------------------------------------------------------------- 作品库
+
+function defaultProjectName() {
+  const first = $('text-input').value.trim().split('\n')[0];
+  return first ? first.slice(0, 20) : '未命名';
+}
+
+function markDirty() {
+  if (!state.project) state.project = { id: null, name: '', dirty: false };
+  if (!state.project.dirty) {
+    state.project.dirty = true;
+    updateSaveButton();
+  }
+}
+
+function updateSaveButton() {
+  const btn = $('btn-save');
+  if (!btn) return;
+  const dirty = !!state.project?.dirty;
+  btn.textContent = dirty ? '保存 •' : '保存';
+  btn.title = state.project?.name ? `保存「${state.project.name}」(Ctrl+S)` : '保存作品 (Ctrl+S)';
+}
+
+async function saveCurrent(explicitName) {
+  if (!state.shapes.length) {
+    showToast('画布上没有内容，无法保存', 'err');
+    return;
+  }
+  const name = (explicitName || state.project?.name || defaultProjectName()).trim() || '未命名';
+  try {
+    const meta = await P.saveProject({
+      id: state.project?.id || null,
+      name,
+      text: $('text-input').value,
+    });
+    state.project = { id: meta.id, name: meta.name, dirty: false };
+    updateSaveButton();
+    showToast(`已保存「${meta.name}」`, 'ok');
+    if (!$('library').hidden) renderLibrary();
+  } catch (err) {
+    showToast(`保存失败：${err && err.message ? err.message : err}`, 'err');
+  }
+}
+
+/** 从工程记录里恢复字体；找不到同名字体时返回 false（保留当前字体） */
+function applyFontFromDoc(font) {
+  if (!font) return true;
+  const fam = state.families.find((f) => f.name === font.family);
+  if (!fam) return false;
+  const face = fam.faces.find((f) => f.subfamily === font.subfamily) || fam.faces[0];
+  state.family = fam.name;
+  state.face = face;
+  syncFontUI();
+  return true;
+}
+
+/** 用 state 里的字体信息刷新字重下拉、字体列表高亮与底部状态 */
+function syncFontUI() {
+  const fam = state.families.find((f) => f.name === state.family);
+  if (!fam) return;
+  const sel = $('face-select');
+  sel.innerHTML = fam.faces
+    .map((f, i) => `<option value="${i}">${esc(f.subfamily)} · ${f.weight}</option>`)
+    .join('');
+  const idx = fam.faces.indexOf(state.face);
+  sel.value = String(idx < 0 ? 0 : idx);
+  updateFontMeta();
+  renderFontList();
+}
+
+async function openProject(id) {
+  try {
+    const raw = await P.loadProject(id);
+    const info = P.applyDoc(raw);
+    state.project = { id, name: info.name, dirty: false };
+    $('text-input').value = info.text;
+    const fontOk = applyFontFromDoc(info.font);
+    updateSaveButton();
+    C.fitView();
+    // 打开工程后右侧笔画列表也必须重建（refreshPanels 默认不动笔画库）
+    refreshPanels(true);
+    closeLibrary();
+    if (!fontOk) showToast(`已打开「${info.name}」，但原字体不可用，沿用当前字体`, 'err');
+    else showToast(`已打开「${info.name}」`, 'ok');
+  } catch (err) {
+    showToast(`打开失败：${err && err.message ? err.message : err}`, 'err');
+  }
+}
+
+function fmtTime(ms) {
+  if (!ms) return '—';
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  const today = new Date();
+  const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+  return sameDay ? `${p(d.getHours())}:${p(d.getMinutes())}` : `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+async function renderLibrary() {
+  const grid = $('lib-grid');
+  grid.innerHTML = '<div class="empty">正在读取…</div>';
+  let items = [];
+  try {
+    items = await P.listProjects();
+  } catch (err) {
+    grid.innerHTML = `<div class="empty">读取失败：${esc(err && err.message ? err.message : err)}</div>`;
+    return;
+  }
+  $('lib-count').textContent = String(items.length);
+  if (!items.length) {
+    grid.innerHTML = '<div class="empty">还没有保存过作品</div>';
+    return;
+  }
+  grid.innerHTML = items
+    .map(
+      (it) =>
+        `<div class="lib-card${it.id === state.project?.id ? ' on' : ''}" data-id="${esc(it.id)}">` +
+        (it.thumb ? `<img class="thumb" src="${it.thumb}" alt="" />` : '<div class="thumb"></div>') +
+        `<div class="meta">` +
+        `<div class="nm" title="${esc(it.name)}">${esc(it.name)}</div>` +
+        `<div class="sub">${fmtTime(it.updatedAt)} · ${it.shapes || 0}路径 ${it.strokes || 0}笔画</div>` +
+        `</div>` +
+        `<button class="del" data-del="${esc(it.id)}" data-name="${esc(it.name)}" title="删除">×</button>` +
+        `</div>`
+    )
+    .join('');
+}
+
+async function openLibrary() {
+  $('library').hidden = false;
+  $('lib-name').value = state.project?.name || defaultProjectName();
+  await renderLibrary();
+  $('lib-name').focus();
+  $('lib-name').select();
+}
+
+function closeLibrary() {
+  $('library').hidden = true;
+}
+
+function bindLibrary() {
+  $('btn-save').addEventListener('click', () => saveCurrent());
+  $('btn-library').addEventListener('click', () => openLibrary());
+  $('lib-close').addEventListener('click', () => closeLibrary());
+  $('lib-save').addEventListener('click', async () => {
+    await saveCurrent($('lib-name').value);
+  });
+  $('lib-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveCurrent($('lib-name').value);
+    }
+  });
+  $('library').addEventListener('click', (e) => {
+    if (e.target === $('library')) closeLibrary();
+  });
+
+  const grid = $('lib-grid');
+  grid.addEventListener('click', async (e) => {
+    const del = e.target.closest('.del');
+    if (del) {
+      e.stopPropagation();
+      const id = del.dataset.del;
+      const nm = del.dataset.name || '该作品';
+      if (!window.confirm(`删除作品「${nm}」？此操作不可撤销。`)) return;
+      try {
+        await P.removeProject(id);
+        if (state.project?.id === id) state.project = { id: null, name: '', dirty: true };
+        updateSaveButton();
+        await renderLibrary();
+        showToast('已删除', 'ok');
+      } catch (err) {
+        showToast(`删除失败：${err && err.message ? err.message : err}`, 'err');
+      }
+      return;
+    }
+    const card = e.target.closest('.lib-card');
+    if (card) openProject(card.dataset.id);
+  });
+}
+
 // ---------------------------------------------------------------- 启动
 
 export async function initUI() {
@@ -750,7 +1022,9 @@ export async function initUI() {
   bindFonts();
   bindOptions();
   bindButtons();
+  bindLibrary();
   bindKeyboard();
+  updateSaveButton();
   C.setBlankDblClickHandler(openCanvasTextInput);
 
   subscribe((reason) => {
@@ -763,6 +1037,7 @@ export async function initUI() {
       updateZoom();
       return;
     }
+    if (reason === 'edit') markDirty();
     schedulePanels(reason);
   });
 

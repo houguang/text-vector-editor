@@ -4,6 +4,7 @@ mod fonts;
 mod geom;
 mod outline;
 mod save;
+mod store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -19,6 +20,10 @@ pub fn run() {
             save::choose_folder,
             save::save_svgs_dialog,
             save::save_svgs_to,
+            store::list_projects,
+            store::save_project,
+            store::load_project,
+            store::delete_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

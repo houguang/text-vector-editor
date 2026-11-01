@@ -7,6 +7,7 @@ import * as S from '../src/js/state.js';
 import * as E from '../src/js/edits.js';
 import { buildSVG, buildContourSVG, buildStrokeSVG } from '../src/js/export.js';
 import { pickDefaultFamily, textAnchorFrame } from '../src/js/ui.js';
+import * as P from '../src/js/projects.js';
 
 let pass = 0;
 const failures = [];
@@ -54,6 +55,9 @@ function line(n) {
 function resetDoc(shapes) {
   S.state.shapes = shapes;
   S.state.strokes = [];
+  S.state.charCells = {};
+  S.state.charSeq = 0;
+  S.state.ui.radicalMode = false;
   S.clearSelection();
   S.clearHistory();
   S.state.nextId = 100;
@@ -652,6 +656,206 @@ test('选中导出：以选中内容为参考框居中，而不是整份文档',
   assert.ok(box.w > 890, `选中内容应放大：${box.w}`);
   assert.ok(box.x >= 49 && box.x <= 51, `应居中偏左 50：${box.x}`);
   assert.ok(box.y >= 49 && box.y <= 51, `应居中偏上 50：${box.y}`);
+});
+
+// ---------------------------------------------------------------- 字身框（部首按整字位置保存）
+
+test('部首模式：记录字身框并按框映射到满格', () => {
+  resetDoc([{ id: 'A', ch: '他', cellKey: 'c1_0', contours: [square(10, 10, 40)] }]);
+  S.state.charCells = { c1_0: { x: 0, y: 0, w: 100, h: 100 } };
+  E.selectShape('A', false);
+  const res = E.addStrokesFromSelection({ useCell: true });
+  assert.equal(res.ok, true, res.msg);
+
+  const st = S.state.strokes[0];
+  assert.deepEqual(st.frame, { x: 0, y: 0, w: 100, h: 100 });
+  assert.ok(st.name.startsWith('部首'));
+
+  const svg = buildStrokeSVG(st.contours, '部首', st.frame);
+  assert.ok(svg.includes('viewBox="0 0 1000 1000"'));
+  const d = svg.match(/ d="([^"]+)"/)[1];
+  const nums = d.match(/-?\d+(?:\.\d+)?/g).map(Number);
+  const xs = nums.filter((_, i) => i % 2 === 0);
+  // 方块在字身框内位于 (10,10)-(50,50)，框宽 100；含 2% 安全余量后 s=9.6、偏移 20
+  assert.ok(Math.abs(Math.min(...xs) - 116) < 1, `minX=${Math.min(...xs)}`);
+  assert.ok(Math.abs(Math.max(...xs) - 500) < 1, `maxX=${Math.max(...xs)}`);
+});
+
+test('笔画模式：不记录字身框，按自身包围盒铺满', () => {
+  resetDoc([{ id: 'A', ch: '他', cellKey: 'c1_0', contours: [square(10, 10, 40)] }]);
+  S.state.charCells = { c1_0: { x: 0, y: 0, w: 100, h: 100 } };
+  E.selectShape('A', false);
+  const res = E.addStrokesFromSelection({ useCell: false });
+  assert.equal(res.ok, true, res.msg);
+  assert.equal(S.state.strokes[0].frame, null);
+
+  const svg = buildStrokeSVG(S.state.strokes[0].contours, '笔画', null);
+  const d = svg.match(/ d="([^"]+)"/)[1];
+  const nums = d.match(/-?\d+(?:\.\d+)?/g).map(Number);
+  const xs = nums.filter((_, i) => i % 2 === 0);
+  // 铺满可用区域（1000 - 50*2 = 900）
+  assert.ok(Math.max(...xs) - Math.min(...xs) > 850, '单笔应放大到接近满格');
+});
+
+test('缺少字身框时给出明确提示', () => {
+  resetDoc([{ id: 'A', ch: '他', cellKey: null, contours: [square(0, 0, 10)] }]);
+  E.selectShape('A', false);
+  const res = E.addStrokesFromSelection({ useCell: true });
+  assert.equal(res.ok, false);
+  assert.ok(res.msg.includes('字身框'));
+});
+
+test('整字移动时字身框同步，单笔移动时不动', () => {
+  resetDoc([
+    { id: 'A', ch: '他', cellKey: 'k', contours: [square(0, 0, 10)] },
+    { id: 'B', ch: '他', cellKey: 'k', contours: [square(20, 0, 10)] },
+  ]);
+  S.state.charCells = { k: { x: 0, y: 0, w: 100, h: 100 } };
+
+  E.applyTranslateToShapes(E.snapshotShapes([S.state.shapes[0]]), 30, 40);
+  assert.equal(S.state.charCells.k.x, 0, '只动一部分时字身框不应移动');
+  assert.equal(S.state.charCells.k.y, 0);
+
+  E.applyTranslateToShapes(E.snapshotShapes(S.state.shapes), 5, 7);
+  assert.equal(S.state.charCells.k.x, 5, '整字移动时字身框应同步');
+  assert.equal(S.state.charCells.k.y, 7);
+});
+
+test('整字缩放时字身框同步缩放', () => {
+  resetDoc([{ id: 'A', ch: '他', cellKey: 'k', contours: [square(0, 0, 10)] }]);
+  S.state.charCells = { k: { x: 10, y: 20, w: 100, h: 100 } };
+  E.applyScaleToShapes(E.snapshotShapes(S.state.shapes), 0, 0, 2, 2);
+  assert.deepEqual(S.state.charCells.k, { x: 20, y: 40, w: 200, h: 200 });
+});
+
+test('字身框：正方形、基线在框内约 88% 处', () => {
+  // 实测字体：size=120, OS/2 typo 升部 0.812em、降部 −0.253em（行距值，不是字面框）
+  const cell = G.charCell(0, 120, 120, 97.44, 126.97);
+  assert.equal(cell.w, cell.h, '字身框应为正方形');
+  assert.equal(cell.w, 120, '边长应等于字号');
+  assert.equal(cell.x, 0, 'advance 等于字号时不应有水平偏移');
+  assert.ok(Math.abs(cell.y - 21.37) < 0.01, `顶边=${cell.y}`);
+  // 基线（126.97）应落在框内约 88% 处
+  const ratio = (126.97 - cell.y) / cell.h;
+  assert.ok(ratio > 0.85 && ratio < 0.92, `基线位置=${(ratio * 100).toFixed(1)}%`);
+});
+
+test('字身框：降部按 0.12em 处理，不被字体行距值带偏', () => {
+  // 若误用 typo 降部 0.253em，框会变成 1.065em 高，字被顶到上方
+  const cell = G.charCell(0, 120, 120, 97.44, 126.97);
+  const bottomGap = cell.y + cell.h - 126.97;
+  assert.ok(Math.abs(bottomGap - 14.4) < 0.5, `框底距基线应为 0.12em，实际 ${bottomGap}`);
+});
+
+test('字身框：拉丁字符按 advance 取宽并居中', () => {
+  const cell = G.charCell(100, 60, 120, 96, 96);
+  assert.equal(cell.w, 120);
+  assert.equal(cell.x, 70, '窄字符应在字宽内居中');
+});
+
+test('字身框：升部异常时被限制在 0.88~0.95em', () => {
+  const low = G.charCell(0, 120, 120, 10, 126.97); // 升部过小 → 抬到 0.88em
+  assert.ok(Math.abs(126.97 - low.y - 105.6) < 0.01, `升部=${126.97 - low.y}`);
+  const high = G.charCell(0, 120, 120, 200, 126.97); // 升部过大 → 压到 0.95em
+  assert.ok(Math.abs(126.97 - high.y - 114) < 0.01, `升部=${126.97 - high.y}`);
+});
+
+// ---------------------------------------------------------------- 作品库
+
+test('作品序列化 → 反序列化完整还原', () => {
+  resetDoc([{ id: 'A', ch: '他', cellKey: 'c1_0', contours: [square(0, 0, 10)] }]);
+  S.state.strokes = [
+    { id: 'k1', name: '亻', example: '他', contours: [square(0, 0, 5)], frame: { x: 0, y: 0, w: 100, h: 100 } },
+  ];
+  S.state.charCells = { c1_0: { x: 0, y: 0, w: 100, h: 100 } };
+  S.state.charSeq = 3;
+  S.state.view = { scale: 2.5, tx: 11, ty: 22 };
+  S.state.face = { family: 'X', subfamily: 'Bold', path: 'C:/x.ttf', index: 0 };
+
+  const raw = P.serializeDoc({ name: '他', text: '他\n们' });
+
+  // 清空后重新载入
+  S.state.shapes = [];
+  S.state.strokes = [];
+  S.state.charCells = {};
+  S.state.view = { scale: 1, tx: 0, ty: 0 };
+
+  const info = P.applyDoc(raw);
+  assert.equal(info.name, '他');
+  assert.equal(info.text, '他\n们');
+  assert.equal(info.font.family, 'X');
+  assert.equal(S.state.shapes.length, 1);
+  assert.equal(S.state.strokes.length, 1);
+  assert.deepEqual(S.state.strokes[0].frame, { x: 0, y: 0, w: 100, h: 100 });
+  assert.deepEqual(S.state.charCells.c1_0, { x: 0, y: 0, w: 100, h: 100 });
+  assert.equal(S.state.charSeq, 3);
+  assert.equal(S.state.view.scale, 2.5);
+});
+
+test('打开损坏的工程会报错而不是崩溃', () => {
+  assert.throws(() => P.applyDoc('{"nope":1}'), /格式不正确/);
+  assert.throws(() => P.applyDoc('not json'), SyntaxError);
+});
+
+test('工程 id 只含安全字符', () => {
+  const id = P.newProjectId();
+  assert.match(id, /^[a-z0-9-]+$/);
+  assert.notEqual(id, P.newProjectId());
+});
+
+// ---------------------------------------------------------------- id 唯一性（打开作品后的回归）
+
+test('打开作品后 id 计数器会推到已有 id 之后', () => {
+  resetDoc([
+    { id: 's1', ch: 'A', contours: [square(0, 0, 10)] },
+    { id: 's7', ch: 'A', contours: [square(20, 0, 10)] },
+  ]);
+  S.state.nextId = 1; // 模拟新会话：计数器落后于文档
+  S.state.strokes = [{ id: 'k5', name: 'x', contours: [square(0, 0, 5)] }];
+  S.state.nextStrokeId = 1;
+
+  S.syncNextIds();
+  assert.equal(S.nextShapeId(), 's8');
+  assert.equal(S.nextShapeId(), 's9');
+  assert.equal(E.nextStrokeId(), 'k6');
+});
+
+test('nextShapeId 会跳过已被占用的 id', () => {
+  resetDoc([{ id: 's2', ch: 'A', contours: [square(0, 0, 10)] }]);
+  S.state.nextId = 2; // 计数器正好落在已用 id 上
+  assert.equal(S.nextShapeId(), 's3');
+});
+
+test('重复 id 会让选择集同时命中两个对象（问题复现）', () => {
+  resetDoc([
+    { id: 's1', ch: 'A', contours: [square(0, 0, 10)] },
+    { id: 's1', ch: 'B', contours: [square(500, 0, 10)] },
+  ]);
+  E.selectShape('s1', false);
+  assert.equal(S.selectedShapes().length, 2, '同 id 的两个对象会一起被选中');
+});
+
+// ---------------------------------------------------------------- 字身框与墨迹错位
+
+test('旧数据：框没跟着字走时，添加部首会按当前墨迹重新锚定', () => {
+  resetDoc([{ id: 'A', ch: '他', cellKey: 'k', contours: [square(300, 0, 10)] }]);
+  // 模拟旧工程：框还停在转换时的位置（当时墨迹在 0,0）
+  S.state.charCells = { k: { x: -10, y: -10, w: 100, h: 100, ink: { x: 0, y: 0, w: 10, h: 10 } } };
+  E.selectShape('A', false);
+  const res = E.addStrokesFromSelection({ useCell: true });
+  assert.equal(res.ok, true, res.msg);
+  const f = S.state.strokes[0].frame;
+  assert.ok(Math.abs(f.x - 290) < 1e-6, `框应平移 300，实际 x=${f.x}`);
+  assert.ok(f.x + f.w >= 310, '框应覆盖当前墨迹');
+});
+
+test('框与墨迹错位时导出仍把笔画放进画布内', () => {
+  const c = square(900, 900, 20); // 远在框外
+  const svg = buildStrokeSVG([c], 'x', { x: 0, y: 0, w: 100, h: 100 });
+  assert.ok(svg, '不应返回 null');
+  const d = svg.match(/ d="([^"]+)"/)[1];
+  const nums = d.match(/-?\d+(?:\.\d+)?/g).map(Number);
+  assert.ok(nums.every((v) => v >= -1 && v <= 1001), '坐标应落在 0..1000 内');
 });
 
 // ---------------------------------------------------------------- 汇总
